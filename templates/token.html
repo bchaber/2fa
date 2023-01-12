@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>2FA</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    One-Time Password
+    <form action="/login/2fa" method="POST">
+        <ul>
+            <li><input type="text" name="token" placeholder="One-Time Password"/></li>
+            <li><input type="submit" name="submit" value="Verify"/></li>
+        </ul>
+    </form>
+</body>
+</html>

@@ -2,5 +2,7 @@ flask
 flask-login
 flask-limiter
 pyotp
+pyqrcode
 webauthn
+python-dotenv
 passlib[argon2]
