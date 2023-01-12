@@ -1,0 +1,6 @@
+flask
+flask-login
+flask-limiter
+pyotp
+webauthn
+passlib[argon2]
