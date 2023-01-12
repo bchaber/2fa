@@ -46,9 +46,7 @@ def load_user(username):
         try:
             res = db.execute("SELECT username, password FROM user WHERE username = ?", (username,) )
             row = res.fetchone()
-            usr = row[0]
-            pwd = row[1]
-            return User(usr, pwd)
+            return User(*row)
         except:
             return None
     return User(username, password)
