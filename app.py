@@ -8,6 +8,7 @@ from flask_login import login_user, logout_user
 from flask_login import  login_required, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from yubico_client import Yubico
 from passlib.hash import argon2
 from passlib.utils import getrandbytes, rng
 from passlib.totp import TOTP
@@ -19,6 +20,11 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # Time-based One-Time Passwords
 factory = TOTP.using(secrets_path=".totp-secrets",
                      issuer=APP_DOMAIN)
+# Yubico One-Time Password
+load_dotenv(".yubi-secrets")
+YUBI_CLIENT = os.getenv("YUBI_CLIENT")
+YUBI_SECRET = os.getenv("YUBI_SECRET")
+yubico = Yubico(YUBI_CLIENT, YUBI_SECRET)
 # Application definition
 app = Flask(__name__)
 app.secret_key = unhexlify(SECRET_KEY)
@@ -30,9 +36,12 @@ limiter = Limiter(get_remote_address)
 limiter.init_app(app)
 
 class User(UserMixin):
-    def __init__(self, username, password, totp):
+    def __init__(self, username, password,
+        fido2, yubi, totp):
         self.id = username
         self.password = password
+        self.fido2 = fido2
+        self.yubi = yubi
         self.totp = totp
 
 def database():
@@ -56,8 +65,8 @@ def load_user(username):
 
     with database() as db:
         try:
-            res = db.execute("SELECT username, password, totp FROM user WHERE username = ?",
-                            (username,) )
+            res = db.execute("SELECT username, password, fido2, yubi, totp " +
+                             "FROM user WHERE username = ?", (username,) )
             row = res.fetchone()
             return User(*row)
         except:
@@ -107,7 +116,17 @@ def login():
 
     if argon2.verify(password, user.password):
         session["username-2fa"] = username
-        return redirect("/login/2fa")
+        second_factor = None
+        if user.totp != "":
+            second_factor = "totp"
+        if user.yubi != "":
+            second_factor = "yubi"
+        if user.fido2 != "":
+            second_factor = "fido2"
+        if second_factor:
+            return redirect("/login/2fa/" + second_factor)
+        login_user(user)
+        return redirect("/home")
     else:
         return "Nieprawidłowy login lub hasło", 401
 
@@ -117,12 +136,38 @@ def logout():
     logout_user()
     return redirect("/")
 
-@app.route("/login/2fa", methods=["GET"])
-def login_2fa_form():
-    return render_template("token.html")
+@app.route("/login/2fa/yubi", methods=["GET"])
+def login_2fa_yubi():
+    return render_template("token.html", second_factor="Yubikey OTP")
 
+@app.route("/login/2fa/totp", methods=["GET"])
+def login_2fa_totp():
+    return render_template("token.html", second_factor="TOTP")
+
+@app.route("/login/2fa/fido2", methods=["GET"])
+def login_2fa_fido2():
+    return render_template("token.html", second_factor="FIDO2")
+
+def verify(user, token):
+    try:
+        if user.fido2 != "":
+            print("2FA: WebAuthn")
+            return False
+
+        if user.yubi != "":
+            print("2FA: Yubikey OTP")
+            return yubico.verify(token) and token[1:12] == user.yubi
+
+        if user.totp != "":
+            print("2FA: TOTP")
+            totp = factory.from_json(user.totp)
+            return TOTP.verify(token, totp)
+    except Exception as ex:
+        print("Exception during 2FA verification: " + str(ex))
+    return False
+    
 @app.route("/login/2fa", methods=["POST"])
-#@limiter.limit("1 per day", key_func = lambda : current_user.username)
+@limiter.limit("10/minute", key_func = lambda : session.get("username-2fa"))
 def login_2fa():
     if "username-2fa" not in session:
         return "Problem z autentykacją", 401
@@ -133,15 +178,10 @@ def login_2fa():
         return "Problem z autentykacją", 401
 
     token = request.form.get("token")
-    try:
-        totp = factory.from_json(user.totp)
-        match = TOTP.verify(token, totp)
-        if match:
-            session.pop("username-2fa")
-            login_user(user)
-            return redirect("/home")
-    except Exception as ex:
-        pass
+    if verify(user, token):
+        session.pop("username-2fa")
+        login_user(user)
+        return redirect("/home")
         
     return "Problem z autentykacją", 401
 
@@ -152,9 +192,12 @@ if __name__ == "__main__":
         db.execute("CREATE TABLE user (" +
                    "username VARCHAR(32), " +
                    "password VARCHAR(128), " + 
-                   "totp VARCHAR(256)" + 
+                   "fido2 VARCHAR(256)," + 
+                   "yubi  VARCHAR(12),"  + 
+                   "totp  VARCHAR(256)" + 
                    ");")
         db.execute("DELETE FROM user;")
-        db.execute("INSERT INTO user (username, password, totp) VALUES ('admin', '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw', '{\"enckey\":{\"c\":14,\"k\":\"CHZ5IOWCNULULPKV7NLSBG6RNK25M3EF\",\"s\":\"3CN5GWVLKWVFL2Q5UOKA\",\"t\":\"2023-01-12\",\"v\":1},\"type\":\"totp\",\"v\":1}');")
+        db.execute("INSERT INTO user (username, password, fido2, yubi, totp) VALUES ('admin', '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw', '', '', '{\"enckey\":{\"c\":14,\"k\":\"CHZ5IOWCNULULPKV7NLSBG6RNK25M3EF\",\"s\":\"3CN5GWVLKWVFL2Q5UOKA\",\"t\":\"2023-01-12\",\"v\":1},\"type\":\"totp\",\"v\":1}');")
+        db.execute("INSERT INTO user (username, password, fido2, yubi, totp) VALUES ('bach', '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw', '', 'ccccccvhrlhr', '');")
         db.commit()
     app.run("0.0.0.0", 5050)

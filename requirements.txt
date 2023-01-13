@@ -5,4 +5,5 @@ pyotp
 pyqrcode
 webauthn
 python-dotenv
+yubico-client
 passlib[argon2]
