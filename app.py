@@ -112,23 +112,21 @@ def login():
     password = request.form.get("password")
     user = load_user(username)
     if user is None:
-        return "Nieprawidłowy login lub hasło", 401
+        return "Incorrect credentials", 401
 
     if argon2.verify(password, user.password):
         session["username-2fa"] = username
-        second_factor = None
+        session["factor-2fa"] = "none"
+        # select the strongest second factor
         if user.totp != "":
-            second_factor = "totp"
+            session["factor-2fa"] = "totp"
         if user.yubi != "":
-            second_factor = "yubi"
+            session["factor-2fa"] = "yubi"
         if user.fido2 != "":
-            second_factor = "fido2"
-        if second_factor:
-            return redirect("/login/2fa/" + second_factor)
-        login_user(user)
-        return redirect("/home")
+            session["factor-2fa"] = "fido2"
+        return redirect("/login/2fa")
     else:
-        return "Nieprawidłowy login lub hasło", 401
+        return "Incorrect credentials", 401
 
 @app.route("/logout")
 @login_required
@@ -136,54 +134,64 @@ def logout():
     logout_user()
     return redirect("/")
 
-@app.route("/login/2fa/yubi", methods=["GET"])
-def login_2fa_yubi():
-    return render_template("token.html", second_factor="Yubikey OTP")
+@app.route("/login/2fa", methods=["GET"])
+def login_2fa_form():
+    factor = session.get("factor-2fa")
+    if not factor:
+        return "Problem z autentykacją", 401
+    elif factor == "none":
+        return render_template("bypass.html")
+    elif factor == "yubi":
+        return render_template("token.html", second_factor="Yubikey OTP")
+    elif factor == "totp":
+        return render_template("token.html", second_factor="TOTP")
+    elif factor == "fido2":
+        return render_template("fido2.html")
+    return "Unknown second factor", 400
 
-@app.route("/login/2fa/totp", methods=["GET"])
-def login_2fa_totp():
-    return render_template("token.html", second_factor="TOTP")
+def verify(req, factor, user):
+    if factor == "fido2" and user.fido2 != "":
+        print("2FA: WebAuthn")
+        return False
 
-@app.route("/login/2fa/fido2", methods=["GET"])
-def login_2fa_fido2():
-    return render_template("token.html", second_factor="FIDO2")
+    if factor == "yubi" and user.yubi != "":
+        print("2FA: Yubikey OTP")
+        token = req.form.get("token", "")
+        return yubico.verify(token) and token[:12] == user.yubi
 
-def verify(user, token):
-    try:
-        if user.fido2 != "":
-            print("2FA: WebAuthn")
-            return False
-
-        if user.yubi != "":
-            print("2FA: Yubikey OTP")
-            return yubico.verify(token) and token[:12] == user.yubi
-
-        if user.totp != "":
-            print("2FA: TOTP")
-            totp = factory.from_json(user.totp)
-            return TOTP.verify(token, totp)
-    except Exception as ex:
-        print("Exception during 2FA verification: " + str(ex))
-    return False
+    if factor == "totp" and user.totp != "":
+        print("2FA: TOTP")
+        token = req.form.get("token", "")
+        totp = factory.from_json(user.totp)
+        return TOTP.verify(token, totp)
+        
+    if factor == "none":
+        return True
     
+    return False
+
 @app.route("/login/2fa", methods=["POST"])
 @limiter.limit("10/minute", key_func = lambda : session.get("username-2fa"))
 def login_2fa():
-    if "username-2fa" not in session:
-        return "Problem z autentykacją", 401
+    if "username-2fa" not in session or "factor-2fa" not in session:
+        return "Authentication problem", 401
     
     username = session["username-2fa"]
     user = load_user(username)
     if user is None:
-        return "Problem z autentykacją", 401
+        return "Authentication problem", 401
 
-    token = request.form.get("token")
-    if verify(user, token):
-        session.pop("username-2fa")
-        login_user(user)
-        return redirect("/home")
-        
-    return "Problem z autentykacją", 401
+    factor = session["factor-2fa"]
+    try:
+        if verify(request, factor, user):
+            session.pop("username-2fa")
+            session.pop("factor-2fa")
+            login_user(user)
+            return redirect("/home")
+    except Exception as ex:
+        print("Exception during 2FA: " + str(ex))
+    
+    return "Authentication problem", 401
 
 if __name__ == "__main__":
     print("[*] Init database!")
