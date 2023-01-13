@@ -156,7 +156,7 @@ def verify(user, token):
 
         if user.yubi != "":
             print("2FA: Yubikey OTP")
-            return yubico.verify(token) and token[1:12] == user.yubi
+            return yubico.verify(token) and token[:12] == user.yubi
 
         if user.totp != "":
             print("2FA: TOTP")
