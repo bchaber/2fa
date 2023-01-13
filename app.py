@@ -94,10 +94,8 @@ def register():
     pw = argon2.hash(password)
 
     with database() as db:
-        db.execute("INSERT INTO user (username, password, totp) " + 
-                   "VALUES (?, ?, ?);", (username, pw, totp.to_json()))
-
-    print(pyqrcode.create(uri).terminal(quiet_zone=1))
+        db.execute("INSERT INTO user (username, password) " + 
+                   "VALUES (?, ?);", (username, pw))
 
     return redirect("/login")
 
@@ -118,11 +116,11 @@ def login():
         session["username-2fa"] = username
         session["factor-2fa"] = "none"
         # select the strongest second factor
-        if user.totp != "":
+        if user.totp:
             session["factor-2fa"] = "totp"
-        if user.yubi != "":
+        if user.yubi:
             session["factor-2fa"] = "yubi"
-        if user.fido2 != "":
+        if user.fido2:
             session["factor-2fa"] = "fido2"
         return redirect("/login/2fa")
     else:
@@ -140,7 +138,7 @@ def login_2fa_form():
     if not factor:
         return "Problem z autentykacją", 401
     elif factor == "none":
-        return render_template("bypass.html")
+        return login_2fa()
     elif factor == "yubi":
         return render_template("token.html", second_factor="Yubikey OTP")
     elif factor == "totp":
@@ -205,7 +203,11 @@ if __name__ == "__main__":
                    "totp  VARCHAR(256)" + 
                    ");")
         db.execute("DELETE FROM user;")
-        db.execute("INSERT INTO user (username, password, fido2, yubi, totp) VALUES ('admin', '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw', '', '', '{\"enckey\":{\"c\":14,\"k\":\"CHZ5IOWCNULULPKV7NLSBG6RNK25M3EF\",\"s\":\"3CN5GWVLKWVFL2Q5UOKA\",\"t\":\"2023-01-12\",\"v\":1},\"type\":\"totp\",\"v\":1}');")
-        db.execute("INSERT INTO user (username, password, fido2, yubi, totp) VALUES ('bach', '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw', '', 'ccccccvhrlhr', '');")
+        db.execute("INSERT INTO user (username, password, fido2, yubi, totp) " +
+                   "VALUES ('admin', '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw', " +
+                   "NULL, NULL, '{\"enckey\":{\"c\":14,\"k\":\"CHZ5IOWCNULULPKV7NLSBG6RNK25M3EF\",\"s\":\"3CN5GWVLKWVFL2Q5UOKA\",\"t\":\"2023-01-12\",\"v\":1},\"type\":\"totp\",\"v\":1}');")
+        db.execute("INSERT INTO user (username, password, fido2, yubi, totp) " + 
+                   "VALUES ('bach', '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw', " + 
+                   "NULL, 'ccccccvhrlhr', NULL);")
         db.commit()
     app.run("0.0.0.0", 5050)
