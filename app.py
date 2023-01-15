@@ -60,7 +60,7 @@ def home():
 
 @login_manager.user_loader
 def load_user(username):
-    if username is None:
+    if username is None or len(username) == 0:
         return None
 
     with database() as db:
@@ -82,12 +82,12 @@ def register_form():
 def register():
     username = request.form.get("username")
     password = request.form.get("password")
-    if username is None or password is None:
-        return "Username and password are required", 400
+    if username is None or password is None or len(username) == 0 or len(password) == 0:
+        return render_template("error.html", message="Username and password are required"), 400
 
     user = load_user(username)
     if user is not None:
-        return "User already registered", 401
+        return render_template("error.html", message="User already registered"), 401
 
     totp = factory.new()
     uri = totp.to_uri(label=username)
@@ -110,7 +110,7 @@ def login():
     password = request.form.get("password")
     user = load_user(username)
     if user is None:
-        return "Incorrect credentials", 401
+        return render_template("error.html", message="Incorrect credentials"), 401
 
     if argon2.verify(password, user.password):
         session["username-2fa"] = username
@@ -120,11 +120,9 @@ def login():
             session["factor-2fa"] = "totp"
         if user.yubi:
             session["factor-2fa"] = "yubi"
-        if user.fido2:
-            session["factor-2fa"] = "fido2"
         return redirect("/login/2fa")
     else:
-        return "Incorrect credentials", 401
+        return render_template("error.html", message="Incorrect credentials"), 401
 
 @app.route("/logout")
 @login_required
@@ -136,28 +134,22 @@ def logout():
 def login_2fa_form():
     factor = session.get("factor-2fa")
     if not factor:
-        return "Problem z autentykacją", 401
+        return render_template("error.html", message="Authentication error"), 401
     elif factor == "none":
-        return login_2fa()
+        return login_2fa() # by-pass the second factor authentication step
     elif factor == "yubi":
         return render_template("token.html", second_factor="Yubikey OTP")
     elif factor == "totp":
         return render_template("token.html", second_factor="TOTP")
-    elif factor == "fido2":
-        return render_template("fido2.html")
-    return "Unknown second factor", 400
+    return render_template("error.html", message="Unknown second factor"), 400
 
 def verify(req, factor, user):
-    if factor == "fido2" and user.fido2 != "":
-        print("2FA: WebAuthn")
-        return False
-
-    if factor == "yubi" and user.yubi != "":
+    if factor == "yubi" and user.yubi:
         print("2FA: Yubikey OTP")
         token = req.form.get("token", "")
         return yubico.verify(token) and token[:12] == user.yubi
 
-    if factor == "totp" and user.totp != "":
+    if factor == "totp" and user.totp:
         print("2FA: TOTP")
         token = req.form.get("token", "")
         totp = factory.from_json(user.totp)
@@ -172,12 +164,12 @@ def verify(req, factor, user):
 @limiter.limit("10/minute", key_func = lambda : session.get("username-2fa"))
 def login_2fa():
     if "username-2fa" not in session or "factor-2fa" not in session:
-        return "Authentication problem", 401
+        return render_template("error.html", message="Authentication error"), 401
     
     username = session["username-2fa"]
     user = load_user(username)
     if user is None:
-        return "Authentication problem", 401
+        return render_template("error.html", message="Authentication error"), 401
 
     factor = session["factor-2fa"]
     try:
@@ -189,10 +181,14 @@ def login_2fa():
     except Exception as ex:
         print("Exception during 2FA: " + str(ex))
     
-    return "Authentication problem", 401
+    return render_template("error.html", message="Authentication error"), 401
 
 if __name__ == "__main__":
     print("[*] Init database!")
+    # predefined credentials
+    admin_otp = '{\"enckey\":{\"c\":14,\"k\":\"CHZ5IOWCNULULPKV7NLSBG6RNK25M3EF\",\"s\":\"3CN5GWVLKWVFL2Q5UOKA\",\"t\":\"2023-01-12\",\"v\":1},\"type\":\"totp\",\"v\":1}'
+    bach_yubi = 'ccccccvhrlhr'
+    admin_123 = '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw'
     with database() as db:
         db.execute("DROP TABLE IF EXISTS user;")
         db.execute("CREATE TABLE user (" +
@@ -204,10 +200,10 @@ if __name__ == "__main__":
                    ");")
         db.execute("DELETE FROM user;")
         db.execute("INSERT INTO user (username, password, fido2, yubi, totp) " +
-                   "VALUES ('admin', '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw', " +
-                   "NULL, NULL, '{\"enckey\":{\"c\":14,\"k\":\"CHZ5IOWCNULULPKV7NLSBG6RNK25M3EF\",\"s\":\"3CN5GWVLKWVFL2Q5UOKA\",\"t\":\"2023-01-12\",\"v\":1},\"type\":\"totp\",\"v\":1}');")
+                  f"VALUES ('admin', '{admin_123}', " +
+                  f"NULL, NULL, '{admin_otp}');")
         db.execute("INSERT INTO user (username, password, fido2, yubi, totp) " + 
-                   "VALUES ('bach', '$argon2id$v=19$m=65536,t=3,p=4$ZKz13hvj/P+/17oX4tybMw$AJO64oLyzXt1D4v+2pOZMYeKGxNJ/lMz6EXUxlCDQjw', " + 
-                   "NULL, 'ccccccvhrlhr', NULL);")
+                  f"VALUES ('bach', '{admin_123}', " + 
+                  f"NULL, '{bach_yubi}', NULL);")
         db.commit()
     app.run("0.0.0.0", 5050)
